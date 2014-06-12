@@ -1,0 +1,120 @@
+heat_template_version: 2013-05-23
+
+description: |
+  This is a Heat template to deploy a single Linux server running Vesta Control
+  Panel
+
+parameters:
+
+  db_image:
+    description: DB Server Image
+    type: string
+    default: 5cc098a5-7286-4b96-b3a2-49f4c4f82537
+
+  web_image:
+    description: Web Server Image
+    type: string
+    default: 5cc098a5-7286-4b96-b3a2-49f4c4f82537
+
+  flavor:
+    description: Rackspace Cloud Server flavor
+    type: string
+    default: 1 GB Performance
+    constraints:
+    - allowed_values:
+      - 1 GB Performance
+      - 2 GB Performance
+      - 4 GB Performance
+      - 8 GB Performance
+      - 15 GB Performance
+      - 30 GB Performance
+      - 1GB Standard Instance
+      - 2GB Standard Instance
+      - 4GB Standard Instance
+      - 8GB Standard Instance
+      - 15GB Standard Instance
+      - 30GB Standard Instance
+      description: |
+        Must be a valid Rackspace Cloud Server flavor for the region you have
+        selected to deploy into.
+
+resources:
+  # SSH Key Setup
+  ssh_key:
+    type: "OS::Nova::KeyPair"
+    properties:
+      name: { get_param: "OS::stack_id" }
+      save_private_key: true
+
+  # Random Password Generation
+  database_password:
+    type: "OS::Heat::RandomString"
+    properties:
+      length: 16
+      sequence: lettersdigits
+
+  db_server:
+    type: "Rackspace::Cloud::Server"
+    properties:
+      name: DB Server
+      flavor: { get_param: flavor }
+      image: { get_param: db_image }
+      key_name: { get_resource: ssh_key }
+      config_drive: "true"
+      user_data_format: RAW
+      user_data:
+        str_replace:
+          template: |
+            #!/bin/bash -xv
+            mysql -e "CREATE USER 'sampleuser'@'%' IDENTIFIED BY '%dbpass%'"
+            mysql -e "CREATE DATABASE sampledatabase"
+            mysql -e "GRANT ALL ON sampledatabase.* TO 'sampleuser'@'10.%' IDENTIFIED BY '%dbpass%'"
+          params:
+            "%dbpass%": { get_attr: [database_password, value] }
+
+  web_server:
+    type: "Rackspace::Cloud::Server"
+    depends_on: db_server
+    properties:
+      name: Web Server
+      flavor: { get_param: flavor }
+      image: { get_param: web_image }
+      key_name: { get_resource: ssh_key }
+      config_drive: "true"
+      user_data_format: RAW
+      user_data:
+        str_replace:
+          template: |
+            #!/bin/bash -xv
+            echo "host = '%dbhost%'" >> /var/www/html/config.ini
+            echo "user = 'sampleuser'" >> /var/www/html/config.ini
+            echo "pass = '%dbpass%'" >> /var/www/html/config.ini
+            echo "db = 'sampledatabase'" >> /var/www/html/config.ini
+          params:
+            "%dbhost%": { get_attr: [db_server, privateIPv4] }
+            "%dbpass%": { get_attr: [database_password, value] }
+
+outputs:
+  private_key:
+    description: The private key to use for logging in as root to the server
+    value: { get_attr: [ssh_key, private_key] }
+
+  web_server_ip:
+    description: The public IP address of the web server
+    value: { get_attr: [web_server, accessIPv4] }
+
+  db_server_ip:
+    description: The public IP address of the db server
+    value: { get_attr: [db_server, accessIPv4] }
+
+  database_password:
+    description: Database password
+    value: { get_attr: [database_password, value] }
+
+  site_url:
+    description: URL for your site
+    value:
+      str_replace:
+        template: "http://%server_ip%"
+        params:
+          "%server_ip%": { get_attr: [web_server, accessIPv4] }
